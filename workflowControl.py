@@ -102,7 +102,7 @@ st.markdown("""
         font-weight: bold;
     }
     </style>
-""", unsafe_value_code=True)
+""", unsafe_allow_html=True)
 
 # --- ONGLET 1 : PIPELINE / KANBAN ---
 with tab_pipeline:
