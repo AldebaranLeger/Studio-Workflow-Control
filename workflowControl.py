@@ -1,606 +1,287 @@
 import streamlit as st
-import streamlit.components.v1 as components
 from streamlit_gsheets import GSheetsConnection
 import pandas as pd
-import json
+from datetime import datetime
 
-st.set_page_config(layout="wide", page_title="Studio Workflow Control PRO")
+# Configuration de la page
+st.set_page_config(layout="wide", page_title="Studio Cloud Workspace", page_icon="🎬")
 
-# 1. CONNEXION À LA BASE DE DONNÉES GOOGLE SHEETS
+st.title("🎬 Studio Cloud Workspace")
+st.caption("Base de données d'équipe synchronisée en temps réel avec Google Sheets")
+
+# 1. CONNEXION ET CHARGEMENT DES DONNÉES
 conn = st.connection("gsheets", type=GSheetsConnection)
 
-# Fonctions de chargement
 def load_data():
     try:
         df_videos = conn.read(worksheet="videos", ttl=0)
         df_clients = conn.read(worksheet="clients", ttl=0)
         df_staff = conn.read(worksheet="staff", ttl=0)
-        return (
-            df_videos.to_dict(orient="records"),
-            df_clients.to_dict(orient="records"),
-            df_staff.to_dict(orient="records")
-        )
-    except:
-        return [], [], []
+        
+        # S'assurer que les colonnes nécessaires existent
+        for col in ['id', 'title', 'clientId', 'staffId', 'platform', 'date', 'status', 'link']:
+            if col not in df_videos.columns:
+                df_videos[col] = ""
+        return df_videos, df_clients, df_staff
+    except Exception as e:
+        # Dataframes par défaut si les feuilles sont complètement vides
+        df_v = pd.DataFrame(columns=['id', 'title', 'clientId', 'staffId', 'platform', 'date', 'status', 'link'])
+        df_c = pd.DataFrame(columns=['id', 'name', 'color'])
+        df_s = pd.DataFrame(columns=['id', 'name'])
+        return df_v, df_c, df_s
 
-# Chargement initial des données partagées
-videos_list, clients_list, staff_list = load_data()
+df_videos, df_clients, df_staff = load_data()
 
-# 2. TRAITEMENT DES ACTIONS REÇUES DE L'INTERFACE HTML/JS
-query_params = st.query_params
-if "action" in query_params:
-    action = query_params["action"]
-    data_payload = json.loads(query_params.get("data", "{}"))
+# Nettoyage des NaN pour éviter les bugs d'affichage
+df_videos = df_videos.fillna("")
+df_clients = df_clients.fillna("")
+df_staff = df_staff.fillna("")
+
+# Création de dictionnaires pour correspondance rapide ID -> Nom
+client_dict = dict(zip(df_clients['id'], df_clients['name'])) if not df_clients.empty else {}
+staff_dict = dict(zip(df_staff['id'], df_staff['name'])) if not df_staff.empty else {}
+
+# 2. BARRE LATÉRALE - CONFIGURATION CLIENTS & STAFF
+with st.sidebar:
+    st.header("⚙️ Configuration")
     
-    if action == "save_all":
-        df_v = pd.DataFrame(data_payload.get("videos", []))
-        df_c = pd.DataFrame(data_payload.get("clients", []))
-        df_s = pd.DataFrame(data_payload.get("staff", []))
-        
-        conn.update(worksheet="videos", data=df_v)
-        conn.update(worksheet="clients", data=df_c)
-        conn.update(worksheet="staff", data=df_s)
-        st.toast("🔄 Base de données partagée mise à jour !", icon="✅")
-        st.query_params.clear()
-        st.rerun()
+    # Onglet interne Configuration
+    conf_tab = st.radio("Gérer :", ["Restaurateurs (Clients)", "Équipe / Staff"])
+    
+    if conf_tab == "Restaurateurs (Clients)":
+        st.subheader("Ajouter un Client")
+        with st.form("add_client_form", clear_on_submit=True):
+            new_c_name = st.text_input("Nom du restaurant *")
+            new_c_color = st.color_picker("Couleur de marquage", "#6366f1")
+            if st.form_submit_button("Ajouter", use_container_width=True):
+                if new_c_name:
+                    new_c = pd.DataFrame([{'id': f"c_{int(datetime.now().timestamp())}", 'name': new_c_name, 'color': new_c_color}])
+                    df_clients = pd.concat([df_clients, new_c], ignore_index=True)
+                    conn.update(worksheet="clients", data=df_clients)
+                    st.success(f"{new_c_name} ajouté !")
+                    st.rerun()
+                    
+        st.subheader("Liste des Clients")
+        for idx, row in df_clients.iterrows():
+            st.text(f"• {row['name']}")
 
-# 3. CODE INTERFACE (HTML/JS) - Utilisation d'une chaîne classique (sans f-string)
-html_template = """
-<!DOCTYPE html>
-<html lang="fr">
-<head>
-    <meta charset="UTF-8">
-    <title>Video Studio Workspace Pro</title>
-    <script src="https://cdn.jsdelivr.net/npm/@tailwindcss/browser@4"></script>
-    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap" rel="stylesheet">
-    <link rel="stylesheet" href="https://fonts.googleapis.com/icon?family=Material+Icons+Round">
+    elif conf_tab == "Équipe / Staff":
+        st.subheader("Ajouter un Membre")
+        with st.form("add_staff_form", clear_on_submit=True):
+            new_s_name = st.text_input("Nom du collaborateur *")
+            if st.form_submit_button("Ajouter", use_container_width=True):
+                if new_s_name:
+                    new_s = pd.DataFrame([{'id': f"s_{int(datetime.now().timestamp())}", 'name': new_s_name}])
+                    df_staff = pd.concat([df_staff, new_s], ignore_index=True)
+                    conn.update(worksheet="staff", data=df_staff)
+                    st.success(f"{new_s_name} ajouté !")
+                    st.rerun()
+                    
+        st.subheader("Membres de l'équipe")
+        for idx, row in df_staff.iterrows():
+            st.text(f"• {row['name']}")
+
+# 3. ONGLETS DE NAVIGATION PRINCIPAUX
+tab_pipeline, tab_calendar, tab_actions = st.tabs(["📊 Pipeline (Kanban)", "📅 Calendrier de Publication", "➕ Ajouter / Modifier"])
+
+# STYLES VISUELS POUR SIMULER DES CARTES KANBAN
+st.markdown("""
     <style>
-        body { font-family: 'Inter', sans-serif; }
-        .column-body { min-height: 450px; }
-        .dragging { opacity: 0.4; transform: scale(0.96); }
-        .calendar-grid { display: grid; grid-template-columns: repeat(7, minmax(0, 1fr)); }
+    .kanban-card {
+        background-color: #1e293b;
+        border-radius: 10px;
+        padding: 12px;
+        margin-bottom: 10px;
+        border-left: 5px solid #6366f1;
+    }
+    .platform-badge {
+        background-color: #334155;
+        padding: 2px 6px;
+        border-radius: 4px;
+        font-size: 10px;
+        font-weight: bold;
+    }
     </style>
-</head>
-<body class="bg-slate-900 text-slate-100 min-h-screen flex flex-col select-none">
+""", unsafe_value_code=True)
 
-    <header class="bg-slate-800 border-b border-slate-700 px-6 py-4 flex flex-col lg:flex-row justify-between items-center gap-4 shadow-lg">
-        <div class="flex items-center space-x-3">
-            <div class="bg-indigo-600 p-2 rounded-lg shadow-md">
-                <span class="material-icons-round text-white block">cloud_sync</span>
-            </div>
-            <div>
-                <h1 class="text-xl font-bold tracking-tight">Studio Cloud Workspace</h1>
-                <p class="text-xs text-emerald-400 font-semibold flex items-center">
-                    <span class="w-2 h-2 rounded-full bg-emerald-500 mr-1.5 animate-pulse"></span>
-                    Base de données d'équipe synchronisée
-                </p>
-            </div>
-        </div>
-
-        <div class="bg-slate-900 p-1 rounded-xl border border-slate-700 flex space-x-1">
-            <button onclick="switchView('kanban')" id="btn-view-kanban" class="px-4 py-2 text-xs font-semibold rounded-lg flex items-center space-x-2 bg-indigo-600 text-white shadow transition cursor-pointer">
-                <span class="material-icons-round text-sm">view_kanban</span><span>Pipeline</span>
-            </button>
-            <button onclick="switchView('calendar')" id="btn-view-calendar" class="px-4 py-2 text-xs font-semibold rounded-lg flex items-center space-x-2 text-slate-400 hover:text-slate-200 transition cursor-pointer">
-                <span class="material-icons-round text-sm">calendar_month</span><span>Calendrier</span>
-            </button>
-            <button onclick="switchView('settings')" id="btn-view-settings" class="px-4 py-2 text-xs font-semibold rounded-lg flex items-center space-x-2 text-slate-400 hover:text-slate-200 transition cursor-pointer">
-                <span class="material-icons-round text-sm">badge</span><span>Clients & Staff</span>
-            </button>
-        </div>
-
-        <div class="flex items-center space-x-2">
-            <button onclick="openBulkModal()" class="bg-slate-700 hover:bg-slate-600 text-slate-200 px-3 py-2 rounded-lg font-medium text-xs flex items-center space-x-1.5 transition cursor-pointer">
-                <span class="material-icons-round text-sm">library_add</span><span>Ajout Multiple</span>
-            </button>
-            <button onclick="openModalForAdd()" class="bg-indigo-600 hover:bg-indigo-500 text-white px-4 py-2 rounded-lg font-medium text-xs flex items-center space-x-1.5 transition shadow-md cursor-pointer">
-                <span class="material-icons-round text-sm">add</span><span>Nouvelle Vidéo</span>
-            </button>
-        </div>
-    </header>
-
-    <div class="flex-1 flex overflow-hidden">
-        <main id="view-kanban" class="flex-1 p-6 overflow-x-auto flex space-x-4 items-start content-start">
-            <div class="bg-slate-800/60 border border-slate-700/50 w-72 shrink-0 rounded-xl p-4 flex flex-col max-h-[80vh]">
-                <div class="flex justify-between items-center mb-4">
-                    <h3 class="font-semibold text-xs text-slate-400 tracking-wide uppercase flex items-center"><span class="w-2 h-2 rounded-full bg-amber-500 mr-2"></span>Pool d'attente</h3>
-                    <span id="count-pool" class="bg-slate-700 text-slate-300 text-xs px-2 py-0.5 rounded-full font-bold">0</span>
-                </div>
-                <div id="col-pool" class="column-body space-y-3 overflow-y-auto pr-1" ondragover="allowDrop(event)" ondrop="drop(event, 'pool')"></div>
-            </div>
-            <div class="bg-slate-800/60 border border-slate-700/50 w-72 shrink-0 rounded-xl p-4 flex flex-col max-h-[80vh]">
-                <div class="flex justify-between items-center mb-4">
-                    <h3 class="font-semibold text-xs text-slate-400 tracking-wide uppercase flex items-center"><span class="w-2 h-2 rounded-full bg-blue-500 mr-2"></span>En cours de montage</h3>
-                    <span id="count-montage" class="bg-slate-700 text-slate-300 text-xs px-2 py-0.5 rounded-full font-bold">0</span>
-                </div>
-                <div id="col-montage" class="column-body space-y-3 overflow-y-auto pr-1" ondragover="allowDrop(event)" ondrop="drop(event, 'montage')"></div>
-            </div>
-            <div class="bg-slate-800/60 border border-slate-700/50 w-72 shrink-0 rounded-xl p-4 flex flex-col max-h-[80vh]">
-                <div class="flex justify-between items-center mb-4">
-                    <h3 class="font-semibold text-xs text-slate-400 tracking-wide uppercase flex items-center"><span class="w-2 h-2 rounded-full bg-purple-500 mr-2"></span>À valider</h3>
-                    <span id="count-validation" class="bg-slate-700 text-slate-300 text-xs px-2 py-0.5 rounded-full font-bold">0</span>
-                </div>
-                <div id="col-validation" class="column-body space-y-3 overflow-y-auto pr-1" ondragover="allowDrop(event)" ondrop="drop(event, 'validation')"></div>
-            </div>
-            <div class="bg-slate-800/60 border border-slate-700/50 w-72 shrink-0 rounded-xl p-4 flex flex-col max-h-[80vh]">
-                <div class="flex justify-between items-center mb-4">
-                    <h3 class="font-semibold text-xs text-slate-400 tracking-wide uppercase flex items-center"><span class="w-2 h-2 rounded-full bg-pink-500 mr-2"></span>En attente de Prog</h3>
-                    <span id="count-attente-prog" class="bg-slate-700 text-slate-300 text-xs px-2 py-0.5 rounded-full font-bold">0</span>
-                </div>
-                <div id="col-attente-prog" class="column-body space-y-3 overflow-y-auto pr-1" ondragover="allowDrop(event)" ondrop="drop(event, 'attente-prog')"></div>
-            </div>
-            <div class="bg-slate-800/60 border border-slate-700/50 w-72 shrink-0 rounded-xl p-4 flex flex-col max-h-[80vh]">
-                <div class="flex justify-between items-center mb-4">
-                    <h3 class="font-semibold text-xs text-slate-400 tracking-wide uppercase flex items-center"><span class="w-2 h-2 rounded-full bg-green-500 mr-2"></span>Programmées</h3>
-                    <span id="count-programme" class="bg-slate-700 text-slate-300 text-xs px-2 py-0.5 rounded-full font-bold">0</span>
-                </div>
-                <div id="col-programme" class="column-body space-y-3 overflow-y-auto pr-1" ondragover="allowDrop(event)" ondrop="drop(event, 'programme')"></div>
-            </div>
-        </main>
-
-        <main id="view-calendar" class="hidden flex-1 p-6 flex space-x-6 overflow-hidden">
-            <div class="bg-slate-800/80 border border-slate-700 w-80 shrink-0 rounded-xl p-4 flex flex-col h-full">
-                <h3 class="font-bold text-sm text-slate-200 mb-3 flex items-center">
-                    <span class="material-icons-round text-pink-400 text-base mr-1.5">hourglass_empty</span>À programmer
-                </h3>
-                <div id="cal-sidebar-backlog" class="flex-1 space-y-3 overflow-y-auto pr-1" ondragover="allowDrop(event)" ondrop="drop(event, 'attente-prog')"></div>
-            </div>
-            <div class="flex-1 bg-slate-800/40 border border-slate-700 rounded-xl p-4 flex flex-col h-full overflow-y-auto">
-                <div class="flex justify-between items-center mb-4">
-                    <h2 id="calendar-month-year" class="text-lg font-bold text-white capitalize">Mois Année</h2>
-                    <div class="flex space-x-2 bg-slate-800 rounded-lg p-0.5 border border-slate-700">
-                        <button onclick="changeMonth(-1)" class="p-1.5 text-slate-400 hover:text-white rounded hover:bg-slate-700 cursor-pointer"><span class="material-icons-round block">chevron_left</span></button>
-                        <button onclick="changeMonth(0)" class="px-3 text-xs font-medium text-slate-300 hover:text-white rounded hover:bg-slate-700 cursor-pointer">Aujourd'hui</button>
-                        <button onclick="changeMonth(1)" class="p-1.5 text-slate-400 hover:text-white rounded hover:bg-slate-700 cursor-pointer"><span class="material-icons-round block">chevron_right</span></button>
+# --- ONGLET 1 : PIPELINE / KANBAN ---
+with tab_pipeline:
+    # Définition des colonnes du workflow
+    statuses = {
+        "pool": "⏳ Pool d'attente",
+        "montage": "🎬 En cours de montage",
+        "validation": "👀 À valider",
+        "attente-prog": "⏸️ En attente de Prog",
+        "programme": "📅 Programmées"
+    }
+    
+    cols = st.columns(len(statuses))
+    
+    for i, (status_key, status_label) in enumerate(statuses.items()):
+        with cols[i]:
+            st.markdown(f"### {status_label}")
+            # Filtrer les vidéos pour ce statut
+            vids_in_status = df_videos[df_videos['status'] == status_key]
+            st.caption(f"{len(vids_in_status)} vidéo(s)")
+            
+            for _, vid in vids_in_status.iterrows():
+                client_name = client_dict.get(vid['clientId'], "Inconnu")
+                staff_name = staff_dict.get(vid['staffId'], "Non assigné")
+                date_str = f" | 🗓️ {vid['date']}" if vid['date'] else ""
+                
+                # Rendu visuel propre
+                st.markdown(f"""
+                <div class="kanban-card">
+                    <div style="display:flex; justify-content:space-between; margin-bottom:4px;">
+                        <span class="platform-badge">{vid['platform']}</span>
+                        <span style="font-size:11px; font-weight:bold; color:#a7f3d0;">{client_name}</span>
                     </div>
+                    <strong style="font-size:13px; color:white;">{vid['title']}</strong><br>
+                    <span style="font-size:11px; color:#94a3b8;">👤 {staff_name}{date_str}</span>
                 </div>
-                <div class="calendar-grid text-center text-xs font-semibold text-slate-400 uppercase tracking-wider mb-2 border-b border-slate-700/50 pb-2">
-                    <div>Lun</div><div>Mar</div><div>Mer</div><div>Jeu</div><div>Ven</div><div>Sam</div><div>Dim</div>
-                </div>
-                <div id="calendar-days-grid" class="calendar-grid flex-1 gap-1.5 min-h-[500px]"></div>
-            </div>
-        </main>
+                """, unsafe_allow_html=True)
+                
+                # Bouton natif pour changer rapidement de statut ou éditer
+                if st.button("Changer le statut ⚙️", key=f"btn_move_{vid['id']}"):
+                    st.info(f"Modifie la vidéo '**{vid['title']}**' dans l'onglet 'Ajouter / Modifier'")
 
-        <main id="view-settings" class="hidden flex-1 p-6 grid grid-cols-1 md:grid-cols-2 gap-6 overflow-y-auto">
-            <div class="bg-slate-800 border border-slate-700 rounded-xl p-5 flex flex-col h-fit">
-                <h2 class="text-base font-bold text-white mb-4 flex items-center"><span class="material-icons-round text-indigo-400 mr-2">storefront</span>Restaurateurs (Clients)</h2>
-                <form onsubmit="addClient(event)" class="flex gap-2 mb-4">
-                    <input type="text" id="new-client-name" required placeholder="Nom du restaurant..." class="flex-1 bg-slate-900 border border-slate-700 rounded-lg px-3 py-1.5 text-sm">
-                    <input type="color" id="new-client-color" value="#6366f1" class="w-10 h-9 cursor-pointer">
-                    <button type="submit" class="bg-indigo-600 hover:bg-indigo-500 text-white text-xs font-medium px-4 rounded-lg">Ajouter</button>
-                </form>
-                <div id="settings-clients-list" class="space-y-2 max-h-60 overflow-y-auto"></div>
-            </div>
-            <div class="bg-slate-800 border border-slate-700 rounded-xl p-5 flex flex-col h-fit">
-                <h2 class="text-base font-bold text-white mb-4 flex items-center"><span class="material-icons-round text-emerald-400 mr-2">groups</span>Équipe / Staff</h2>
-                <form onsubmit="addStaff(event)" class="flex gap-2 mb-4">
-                    <input type="text" id="new-staff-name" required placeholder="Nom du collaborateur..." class="flex-1 bg-slate-900 border border-slate-700 rounded-lg px-3 py-1.5 text-sm">
-                    <button type="submit" class="bg-emerald-600 hover:bg-emerald-500 text-white text-xs font-medium px-4 rounded-lg">Ajouter</button>
-                </form>
-                <div id="settings-staff-list" class="space-y-2 max-h-60 overflow-y-auto"></div>
-            </div>
-        </main>
-    </div>
-
-    <div id="videoModal" class="hidden fixed inset-0 bg-black/70 backdrop-blur-sm flex items-center justify-center z-50 p-4">
-        <div class="bg-slate-800 border border-slate-700 rounded-2xl w-full max-w-md p-6 shadow-2xl relative">
-            <button onclick="toggleModal(false)" class="absolute top-4 right-4 text-slate-400 hover:text-white cursor-pointer"><span class="material-icons-round">close</span></button>
-            <h2 id="modalTitle" class="text-lg font-bold mb-4 text-white">Créer une vidéo</h2>
-            <form id="videoForm" class="space-y-4" onsubmit="handleFormSubmit(event)">
-                <input type="hidden" id="edit-id">
-                <div>
-                    <label class="block text-xs font-semibold uppercase text-slate-400 mb-1">Titre de la vidéo *</label>
-                    <input type="text" id="title" required class="w-full bg-slate-900 border border-slate-700 rounded-lg px-3 py-2 text-sm text-white">
-                </div>
-                <div class="grid grid-cols-2 gap-4">
-                    <div>
-                        <label class="block text-xs font-semibold uppercase text-slate-400 mb-1">Restaurateur *</label>
-                        <select id="client-select" required class="w-full bg-slate-900 border border-slate-700 rounded-lg px-3 py-2 text-sm text-slate-200"></select>
-                    </div>
-                    <div>
-                        <label class="block text-xs font-semibold uppercase text-slate-400 mb-1">Assigné à</label>
-                        <select id="assigned-select" class="w-full bg-slate-900 border border-slate-700 rounded-lg px-3 py-2 text-sm text-slate-200"></select>
-                    </div>
-                </div>
-                <div class="grid grid-cols-2 gap-4">
-                    <div>
-                        <label class="block text-xs font-semibold uppercase text-slate-400 mb-1">Réseau Principal</label>
-                        <select id="platform" class="w-full bg-slate-900 border border-slate-700 rounded-lg px-3 py-2 text-sm text-slate-300">
-                            <option value="TikTok">TikTok 📱</option>
-                            <option value="Instagram">Instagram Reels 📸</option>
-                            <option value="Les deux">Les deux ✨</option>
-                        </select>
-                    </div>
-                    <div>
-                        <label class="block text-xs font-semibold uppercase text-slate-400 mb-1">Étape du Workflow *</label>
-                        <select id="status" class="w-full bg-slate-900 border border-slate-700 rounded-lg px-3 py-2 text-sm text-slate-300">
-                            <option value="pool">Pool d'attente ⏳</option>
-                            <option value="montage">En cours de montage 🎬</option>
-                            <option value="validation">À valider 👀</option>
-                            <option value="attente-prog">En attente de prog ⏸️</option>
-                            <option value="programme">Programmé 📅</option>
-                        </select>
-                    </div>
-                </div>
-                <div>
-                    <label class="block text-xs font-semibold uppercase text-slate-400 mb-1">Date de programmation</label>
-                    <input type="date" id="prodDate" class="w-full bg-slate-900 border border-slate-700 rounded-lg px-3 py-2 text-sm text-slate-300">
-                </div>
-                <div>
-                    <label class="block text-xs font-semibold uppercase text-slate-400 mb-1">Lien de livraison / Drive</label>
-                    <input type="url" id="driveLink" class="w-full bg-slate-900 border border-slate-700 rounded-lg px-3 py-2 text-sm text-white" placeholder="https://...">
-                </div>
-                <div class="pt-2 flex space-x-3">
-                    <button type="button" id="btn-delete" onclick="triggerDelete()" class="hidden bg-rose-600/20 text-rose-400 hover:bg-rose-600 hover:text-white px-3 rounded-lg text-sm transition"><span class="material-icons-round block">delete</span></button>
-                    <button type="button" onclick="toggleModal(false)" class="flex-1 bg-slate-700 text-slate-200 py-2 rounded-lg font-medium text-xs">Annuler</button>
-                    <button type="submit" class="flex-1 bg-indigo-600 text-white py-2 rounded-lg font-medium text-xs shadow-md">Enregistrer</button>
-                </div>
-            </form>
-        </div>
-    </div>
-
-    <div id="bulkModal" class="hidden fixed inset-0 bg-black/70 backdrop-blur-sm flex items-center justify-center z-50 p-4">
-        <div class="bg-slate-800 border border-slate-700 rounded-2xl w-full max-w-lg p-6 shadow-2xl relative">
-            <button onclick="toggleBulkModal(false)" class="absolute top-4 right-4 text-slate-400 hover:text-white cursor-pointer"><span class="material-icons-round">close</span></button>
-            <h2 class="text-lg font-bold mb-2 text-white">Création groupée de vidéos</h2>
-            <form onsubmit="handleBulkSubmit(event)" class="space-y-4">
-                <div class="grid grid-cols-2 gap-4">
-                    <div>
-                        <label class="block text-xs font-semibold uppercase text-slate-400 mb-1">Restaurateur *</label>
-                        <select id="bulk-client-select" required class="w-full bg-slate-900 border border-slate-700 rounded-lg px-3 py-2 text-sm text-slate-200"></select>
-                    </div>
-                    <div>
-                        <label class="block text-xs font-semibold uppercase text-slate-400 mb-1">Réseau Principal</label>
-                        <select id="bulk-platform" class="w-full bg-slate-900 border border-slate-700 rounded-lg px-3 py-2 text-sm text-slate-300">
-                            <option value="TikTok">TikTok 📱</option>
-                            <option value="Instagram">Instagram Reels 📸</option>
-                            <option value="Les deux">Les deux ✨</option>
-                        </select>
-                    </div>
-                </div>
-                <div>
-                    <label class="block text-xs font-semibold uppercase text-slate-400 mb-1">Titres des Vidéos (Un par ligne) *</label>
-                    <textarea id="bulk-titles" required rows="5" placeholder="Vidéo 1&#10;Vidéo 2" class="w-full bg-slate-900 border border-slate-700 rounded-lg px-3 py-2 text-sm text-white"></textarea>
-                </div>
-                <div class="pt-2 flex space-x-3">
-                    <button type="button" onclick="toggleBulkModal(false)" class="w-1/3 bg-slate-700 text-slate-200 py-2 rounded-lg font-medium text-xs">Annuler</button>
-                    <button type="submit" class="flex-1 bg-indigo-600 text-white py-2 rounded-lg font-medium text-xs">Générer</button>
-                </div>
-            </form>
-        </div>
-    </div>
-
-    <script>
-        let currentView = 'kanban';
-        let currentDate = new Date();
-
-        // ZONE D'INJECTION DYNAMIQUE VIA REPLACEMENT PYTHON
-        let clients = __CLIENTS_DATA__;
-        let staff = __STAFF_DATA__;
-        let videos = __VIDEOS_DATA__;
-
-        // Nettoyage des formats de données Pandas (NaN vers chaînes vides)
-        videos = videos.map(v => ({
-            id: String(v.id || ''),
-            title: String(v.title || ''),
-            clientId: String(v.clientId || ''),
-            staffId: String(v.staffId || ''),
-            platform: String(v.platform || 'TikTok'),
-            date: String(v.date || '') === 'nan' ? '' : String(v.date || ''),
-            link: String(v.link || '#'),
-            status: String(v.status || 'pool')
-        }));
-
-        // FONCTION DE SAUVEGARDE EN LIGNE (Envoi vers Python Streamlit)
-        function saveAll() {
-            const payload = JSON.stringify({ videos, clients, staff });
-            const url = new URL(window.location.href);
-            url.searchParams.set("action", "save_all");
-            url.searchParams.set("data", payload);
-            window.location.href = url.href;
-        }
-
-        function switchView(view) {
-            currentView = view;
-            document.getElementById('view-kanban').classList.toggle('hidden', view !== 'kanban');
-            document.getElementById('view-calendar').classList.toggle('hidden', view !== 'calendar');
-            document.getElementById('view-settings').classList.toggle('hidden', view !== 'settings');
-            renderAll();
-        }
-
-        function populateDropdowns() {
-            const selects = ['client-select', 'bulk-client-select'];
-            selects.forEach(sId => {
-                const el = document.getElementById(sId);
-                if(!el) return;
-                el.innerHTML = '';
-                clients.forEach(c => el.innerHTML += `<option value="${c.id}">${c.name}</option>`);
-            });
-            const staffSelect = document.getElementById('assigned-select');
-            if(staffSelect) {
-                staffSelect.innerHTML = '<option value="">Non assigné</option>';
-                staff.forEach(s => staffSelect.innerHTML += `<option value="${s.id}">${s.name}</option>`);
-            }
-        }
-
-        function addClient(e) {
-            e.preventDefault();
-            const name = document.getElementById('new-client-name').value;
-            const color = document.getElementById('new-client-color').value;
-            clients.push({ id: 'c_' + Date.now(), name, color });
-            saveAll();
-        }
-
-        function removeClient(id) {
-            if(confirm("Supprimer ce restaurateur ?")) {
-                clients = clients.filter(c => c.id !== id);
-                saveAll();
-            }
-        }
-
-        function addStaff(e) {
-            e.preventDefault();
-            const name = document.getElementById('new-staff-name').value;
-            staff.push({ id: 's_' + Date.now(), name });
-            saveAll();
-        }
-
-        function removeStaff(id) {
-            if(confirm("Supprimer ce membre ?")) {
-                staff = staff.filter(s => s.id !== id);
-                saveAll();
-            }
-        }
-
-        function toggleModal(show) { document.getElementById('videoModal').classList.toggle('hidden', !show); }
-        function toggleBulkModal(show) { document.getElementById('bulkModal').classList.toggle('hidden', !show); }
-
-        function openModalForAdd(defaultDate = '') {
-            if(clients.length === 0) { alert("Ajoutez d'abord un client dans Clients & Staff."); return; }
-            document.getElementById('modalTitle').innerText = "Créer une vidéo";
-            document.getElementById('videoForm').reset();
-            document.getElementById('edit-id').value = '';
-            document.getElementById('status').value = defaultDate ? 'programme' : 'pool';
-            document.getElementById('prodDate').value = defaultDate;
-            document.getElementById('btn-delete').classList.add('hidden');
-            toggleModal(true);
-        }
-
-        function openModalForEdit(id) {
-            const v = videos.find(item => item.id === id);
-            if(!v) return;
-            document.getElementById('modalTitle').innerText = "Paramètres";
-            document.getElementById('edit-id').value = v.id;
-            document.getElementById('title').value = v.title;
-            document.getElementById('client-select').value = v.clientId;
-            document.getElementById('assigned-select').value = v.staffId || "";
-            document.getElementById('platform').value = v.platform;
-            document.getElementById('status').value = v.status;
-            document.getElementById('prodDate').value = v.date;
-            document.getElementById('driveLink').value = v.link === "#" ? "" : v.link;
-            document.getElementById('btn-delete').classList.remove('hidden');
-            toggleModal(true);
-        }
-
-        function handleFormSubmit(e) {
-            e.preventDefault();
-            const id = document.getElementById('edit-id').value;
-            const status = document.getElementById('status').value;
-            const date = document.getElementById('prodDate').value;
-
-            if (status === 'programme' && !date) { alert('Date requise.'); return; }
-
-            const data = {
-                title: document.getElementById('title').value,
-                clientId: document.getElementById('client-select').value,
-                staffId: document.getElementById('assigned-select').value,
-                platform: document.getElementById('platform').value,
-                status: status,
-                date: status === 'programme' ? date : '',
-                link: document.getElementById('driveLink').value || "#"
-            };
-
-            if(id) {
-                const idx = videos.findIndex(v => v.id === id);
-                if(idx !== -1) videos[idx] = { id, ...data };
-            } else {
-                videos.push({ id: String(Date.now()), ...data });
-            }
-            saveAll();
-        }
-
-        function triggerDelete() {
-            const id = document.getElementById('edit-id').value;
-            if(id && confirm("Supprimer ?")) {
-                videos = videos.filter(v => v.id !== id);
-                saveAll();
-            }
-        }
-
-        function openBulkModal() {
-            if(clients.length === 0) { alert("Configurez un client d'abord."); return; }
-            document.getElementById('bulk-titles').value = '';
-            toggleBulkModal(true);
-        }
-
-        function handleBulkSubmit(e) {
-            e.preventDefault();
-            const clientId = document.getElementById('bulk-client-select').value;
-            const platform = document.getElementById('bulk-platform').value;
-            const rawTitles = document.getElementById('bulk-titles').value.split('\n');
-
-            rawTitles.forEach(t => {
-                const clean = t.trim();
-                if(clean.length > 0) {
-                    videos.push({
-                        id: 'b_' + Math.random().toString(36).substr(2, 5),
-                        title: clean,
-                        clientId: clientId,
-                        staffId: "",
-                        platform: platform,
-                        status: 'pool',
-                        date: '',
-                        link: '#'
-                    });
-                }
-            });
-            saveAll();
-        }
-
-        function createCard(v) {
-            const clientObj = clients.find(c => String(c.id) === String(v.clientId)) || { name: 'Inconnu', color: '#64748b' };
-            const staffObj = staff.find(s => String(s.id) === String(v.staffId)) || { name: 'Non assigné' };
-            const pColor = v.platform === 'TikTok' ? 'bg-cyan-500/20 text-cyan-300' : v.platform === 'Instagram' ? 'bg-fuchsia-500/20 text-fuchsia-300' : 'bg-indigo-500/20 text-indigo-300';
-            const dateBadge = v.date ? `<div class="mt-2 text-[10px] text-green-400 font-medium flex items-center"><span class="material-icons-round text-xs mr-1">calendar_today</span> ${formatDateString(v.date)}</div>` : '';
-
-            return `
-                <div class="bg-slate-700/60 hover:bg-slate-700 border-l-4 p-3 rounded-xl shadow transition-all cursor-grab active:cursor-grabbing group relative" 
-                     style="border-color: ${clientObj.color}" draggable="true" id="${v.id}" ondragstart="drag(event)" ondragend="dragEnd(event)" onclick="openModalForEdit('${v.id}')">
-                    <div class="flex items-center justify-between mb-1">
-                        <span class="text-[9px] font-bold uppercase tracking-wider px-1.5 py-0.5 rounded ${pColor}">${v.platform}</span>
-                        <span class="text-[10px] font-bold px-2 py-0.5 rounded-full" style="background-color: ${clientObj.color}20; color: ${clientObj.color}">${clientObj.name}</span>
-                    </div>
-                    <h4 class="font-semibold text-xs text-white leading-tight mb-2">${v.title}</h4>
-                    <div class="flex items-center text-[10px] text-slate-400">
-                        <span class="material-icons-round text-xs mr-1 text-slate-500">account_circle</span>
-                        <span class="truncate">${staffObj.name}</span>
-                    </div>
-                    ${dateBadge}
-                </div>
-            `;
-        }
-
-        function renderAll() {
-            populateDropdowns();
-            if(currentView === 'kanban') {
-                const cols = { pool: [], montage: [], validation: [], 'attente-prog': [], programme: [] };
-                videos.forEach(v => { if(cols[v.status]) cols[v.status].push(v); });
-                Object.keys(cols).forEach(cName => {
-                    document.getElementById(`count-${cName}`).innerText = cols[cName].length;
-                    const box = document.getElementById(`col-${cName}`);
-                    box.innerHTML = '';
-                    cols[cName].forEach(v => box.innerHTML += createCard(v));
-                });
-            } else if(currentView === 'calendar') {
-                const side = document.getElementById('cal-sidebar-backlog');
-                side.innerHTML = '';
-                videos.filter(v => v.status === 'attente-prog').forEach(v => side.innerHTML += createCard(v));
-                renderCalendarGrid();
-            } else {
-                const cBox = document.getElementById('settings-clients-list');
-                cBox.innerHTML = '';
-                clients.forEach(c => {
-                    cBox.innerHTML += `
-                        <div class="flex justify-between items-center bg-slate-900 px-3 py-2 rounded-lg border border-slate-700">
-                            <div class="flex items-center space-x-2">
-                                <span class="w-3 h-3 rounded-full" style="background-color: ${c.color}"></span>
-                                <span class="text-sm font-medium text-slate-200">${c.name}</span>
-                            </div>
-                            <button onclick="removeClient('${c.id}')" class="text-slate-500 hover:text-rose-400 transition cursor-pointer"><span class="material-icons-round text-sm">delete</span></button>
-                        </div>
-                    `;
-                });
-                const sBox = document.getElementById('settings-staff-list');
-                sBox.innerHTML = '';
-                staff.forEach(s => {
-                    sBox.innerHTML += `
-                        <div class="flex justify-between items-center bg-slate-900 px-3 py-2 rounded-lg border border-slate-700">
-                            <span class="text-sm text-slate-200 font-medium">${s.name}</span>
-                            <button onclick="removeStaff('${s.id}')" class="text-slate-500 hover:text-rose-400 transition cursor-pointer"><span class="material-icons-round text-sm">delete</span></button>
-                        </div>
-                    `;
-                });
-            }
-        }
-
-        function renderCalendarGrid() {
-            const grid = document.getElementById('calendar-days-grid');
-            grid.innerHTML = '';
-            const y = currentDate.getFullYear();
-            const m = currentDate.getMonth();
-            document.getElementById('calendar-month-year').innerText = currentDate.toLocaleDateString('fr-FR', { month: 'long', year: 'numeric' });
-            const firstDay = (new Date(y, m, 1).getDay() + 6) % 7;
-            const totalDays = new Date(y, m + 1, 0).getDate();
-
-            for (let i = 0; i < firstDay; i++) grid.innerHTML += `<div class="bg-slate-800/10 border border-slate-800/30 rounded-lg opacity-10"></div>`;
-
-            for (let d = 1; d <= totalDays; d++) {
-                const dStr = `${y}-${String(m + 1).padStart(2, '0')}-${String(d).padStart(2, '0')}`;
-                const matchedVids = videos.filter(v => v.status === 'programme' && v.date === dStr);
-                let inlineHTML = '';
-                matchedVids.forEach(v => {
-                    const cObj = clients.find(c => String(c.id) === String(v.clientId)) || { name: '?', color: '#indigo' };
-                    inlineHTML += `
-                        <div onclick="event.stopPropagation(); openModalForEdit('${v.id}')" class="text-[10px] p-1 rounded font-medium truncate border mb-1 text-white" 
-                             style="background-color: ${cObj.color}cc; border-color: ${cObj.color}">
-                            [${cObj.name}] ${v.title}
-                        </div>
-                    `;
-                });
-                const isToday = new Date().toDateString() === new Date(y, m, d).toDateString() ? 'border-2 border-indigo-500 bg-slate-800' : 'border-slate-700/60 bg-slate-800/40';
-                const cell = document.createElement('div');
-                cell.className = `${isToday} border rounded-xl p-1.5 flex flex-col min-h-[95px] overflow-hidden hover:bg-slate-800/70 transition`;
-                cell.setAttribute('ondragover', 'allowDrop(event)');
-                cell.setAttribute('ondrop', `dropOnDate(event, '${dStr}')`);
-                cell.setAttribute('onclick', `openModalForAdd('${dStr}')`);
-                cell.innerHTML = `<div class="text-right text-xs font-bold text-slate-500 mb-1">${d}</div><div class="flex-1 overflow-y-auto space-y-0.5">${inlineHTML}</div>`;
-                grid.appendChild(cell);
-            }
-        }
-
-        function changeMonth(dir) {
-            if(dir === 0) currentDate = new Date();
-            else currentDate.setMonth(currentDate.getMonth() + dir);
-            renderCalendarGrid();
-        }
-
-        function formatDateString(str) {
-            return new Date(str).toLocaleDateString('fr-FR', { day: 'numeric', month: 'short' });
-        }
-
-        function drag(ev) { ev.dataTransfer.setData("text/plain", ev.target.id); ev.target.classList.add('dragging'); }
-        function dragEnd(ev) { ev.target.classList.remove('dragging'); }
-        function allowDrop(ev) { ev.preventDefault(); }
+# --- ONGLET 2 : CALENDRIER ---
+with tab_calendar:
+    st.subheader("Publications programmées")
+    vids_programmed = df_videos[df_videos['status'] == "programme"].copy()
+    if not vids_programmed.empty:
+        # Recréer un affichage propre sous forme de liste chronologique claire
+        vids_programmed['Restaurateur'] = vids_programmed['clientId'].map(client_dict)
+        vids_programmed['Assigné à'] = vids_programmed['staffId'].map(staff_dict)
         
-        function drop(ev, destStatus) {
-            ev.preventDefault();
-            const id = ev.dataTransfer.getData("text/plain");
-            const idx = videos.findIndex(v => v.id === id);
-            if(idx !== -1) {
-                if(destStatus === 'programme' && !videos[idx].date) {
-                    const d = prompt("Date requise (AAAA-MM-JJ) :");
-                    if(!d) return;
-                    videos[idx].date = d;
-                }
-                if(destStatus !== 'programme') videos[idx].date = '';
-                videos[idx].status = destStatus;
-                saveAll();
-            }
-        }
+        # Tri par date de publication
+        vids_programmed = vids_programmed.sort_values(by='date')
+        
+        st.dataframe(
+            vids_programmed[['date', 'title', 'Restaurateur', 'Assigné à', 'platform', 'link']],
+            column_config={
+                "date": "Date de Publication",
+                "title": "Titre de la Vidéo",
+                "link": st.column_config.LinkColumn("Lien Drive/Livraison")
+            },
+            use_container_width=True,
+            hide_index=True
+        )
+    else:
+        st.info("Aucune vidéo n'est actuellement programmée avec une date précise.")
 
-        function dropOnDate(ev, dateStr) {
-            ev.preventDefault(); ev.stopPropagation();
-            const id = ev.dataTransfer.getData("text/plain");
-            const idx = videos.findIndex(v => v.id === id);
-            if(idx !== -1) {
-                videos[idx].status = 'programme';
-                videos[idx].date = dateStr;
-                saveAll();
-            }
-        }
+# --- ONGLET 3 : ACTIONS (AJOUTER / MODIFIER) ---
+with tab_actions:
+    act_mode = st.radio("Action :", ["Ajouter une vidéo", "Création groupée (Bulk)", "Modifier / Supprimer une vidéo"], horizontal=True)
+    
+    client_options = {row['id']: row['name'] for _, row in df_clients.iterrows()}
+    staff_options = {"": "Non assigné"}
+    for _, row in df_staff.iterrows():
+        staff_options[row['id']] = row['name']
+        
+    if act_mode == "Ajouter une vidéo":
+        if not client_options:
+            st.warning("Veuillez d'abord ajouter un client dans la barre latérale.")
+        else:
+            with st.form("add_video_form", clear_on_submit=True):
+                title = st.text_input("Titre de la vidéo *")
+                c_id = st.selectbox("Restaurateur *", options=list(client_options.keys()), format_func=lambda x: client_options[x])
+                s_id = st.selectbox("Assigner à", options=list(staff_options.keys()), format_func=lambda x: staff_options[x])
+                platform = st.selectbox("Réseau Principal", ["TikTok", "Instagram", "Les deux"])
+                status = st.selectbox("Étape du Workflow", list(statuses.keys()), format_func=lambda x: statuses[x])
+                pub_date = st.date_input("Date de publication (Optionnel)", value=None)
+                drive_link = st.text_input("Lien Drive / Livraison", placeholder="https://...")
+                
+                if st.form_submit_button("Enregistrer la vidéo", use_container_width=True):
+                    if title:
+                        new_vid = {
+                            'id': str(int(datetime.now().timestamp())),
+                            'title': title,
+                            'clientId': c_id,
+                            'staffId': s_id,
+                            'platform': platform,
+                            'date': str(pub_date) if pub_date else "",
+                            'status': status,
+                            'link': drive_link if drive_link else "#"
+                        }
+                        df_videos = pd.concat([df_videos, pd.DataFrame([new_vid])], ignore_index=True)
+                        conn.update(worksheet="videos", data=df_videos)
+                        st.success(f"Vidéo '{title}' enregistrée avec succès dans la base partagée !")
+                        st.rerun()
 
-        renderAll();
-    </script>
-</body>
-</html>
-"""
+    elif act_mode == "Création groupée (Bulk)":
+        if not client_options:
+            st.warning("Veuillez d'abord ajouter un client.")
+        else:
+            with st.form("bulk_form", clear_on_submit=True):
+                c_id = st.selectbox("Restaurateur *", options=list(client_options.keys()), format_func=lambda x: client_options[x])
+                platform = st.selectbox("Réseau Principal", ["TikTok", "Instagram", "Les deux"])
+                bulk_titles = st.text_area("Titres des vidéos (un titre par ligne) *", placeholder="Concept Vidéo 1\nConcept Vidéo 2")
+                
+                if st.form_submit_button("Générer les vidéos", use_container_width=True):
+                    if bulk_titles:
+                        lines = [line.strip() for line in bulk_titles.split("\n") if line.strip()]
+                        new_rows = []
+                        timestamp_base = int(datetime.now().timestamp())
+                        for idx, line in enumerate(lines):
+                            new_rows.append({
+                                'id': str(timestamp_base + idx),
+                                'title': line,
+                                'clientId': c_id,
+                                'staffId': "",
+                                'platform': platform,
+                                'date': "",
+                                'status': "pool",
+                                'link': "#"
+                            })
+                        df_videos = pd.concat([df_videos, pd.DataFrame(new_rows)], ignore_index=True)
+                        conn.update(worksheet="videos", data=df_videos)
+                        st.success(f"{len(new_rows)} vidéos ajoutées au Pool d'attente !")
+                        st.rerun()
 
-# INJECTION DES DONNÉES EN TOUTE SÉCURITÉ SANS CONFLIT D'ACCOLADES
-compiled_html = html_template.replace("__CLIENTS_DATA__", json.dumps(clients_list))
-compiled_html = compiled_html.replace("__STAFF_DATA__", json.dumps(staff_list))
-compiled_html = compiled_html.replace("__VIDEOS_DATA__", json.dumps(videos_list))
-
-# AFFICHAGE DANS STREAMLIT
-# On utilise st.components.v1.html avec le paramètre de rendu classique
-# Si le problème persiste, on peut forcer l'iframe à accepter les scripts de redirection
-st.components.v1.html(compiled_html, height=950, scrolling=True)
+    elif act_mode == "Modifier / Supprimer une vidéo":
+        if df_videos.empty:
+            st.info("Aucune vidéo dans la base de données.")
+        else:
+            video_options = {row['id']: f"[{client_dict.get(row['clientId'], '?')}] {row['title']}" for _, row in df_videos.iterrows()}
+            selected_vid_id = st.selectbox("Sélectionner la vidéo à modifier", options=list(video_options.keys()), format_func=lambda x: video_options[x])
+            
+            # Récupérer les infos actuelles de la vidéo sélectionnée
+            vid_data = df_videos[df_videos['id'] == selected_vid_id].iloc[0]
+            
+            with st.form("edit_form"):
+                u_title = st.text_input("Titre de la vidéo", value=vid_data['title'])
+                u_c_id = st.selectbox("Restaurateur", options=list(client_options.keys()), index=list(client_options.keys()).index(vid_data['clientId']) if vid_data['clientId'] in client_options else 0, format_func=lambda x: client_options[x])
+                u_s_id = st.selectbox("Assigner à", options=list(staff_options.keys()), index=list(staff_options.keys()).index(vid_data['staffId']) if vid_data['staffId'] in staff_options else 0, format_func=lambda x: staff_options[x])
+                u_platform = st.selectbox("Réseau Principal", ["TikTok", "Instagram", "Les deux"], index=["TikTok", "Instagram", "Les deux"].index(vid_data['platform']) if vid_data['platform'] in ["TikTok", "Instagram", "Les deux"] else 0)
+                u_status = st.selectbox("Étape du Workflow", list(statuses.keys()), index=list(statuses.keys()).index(vid_data['status']) if vid_data['status'] in statuses else 0, format_func=lambda x: statuses[x])
+                
+                current_date_val = None
+                if vid_data['date']:
+                    try:
+                        current_date_val = datetime.strptime(vid_data['date'], "%Y-%m-%d").date()
+                    except:
+                        pass
+                u_pub_date = st.date_input("Date de publication", value=current_date_val)
+                u_drive_link = st.text_input("Lien Drive / Livraison", value=vid_data['link'])
+                
+                col_save, col_del = st.columns([3, 1])
+                
+                with col_save:
+                    save_trigger = st.form_submit_button("💾 Sauvegarder les modifications", use_container_width=True)
+                with col_del:
+                    delete_trigger = st.form_submit_button("🚨 Supprimer", use_container_width=True)
+                
+                if save_trigger:
+                    df_videos.loc[df_videos['id'] == selected_vid_id, ['title', 'clientId', 'staffId', 'platform', 'status', 'date', 'link']] = [
+                        u_title, u_c_id, u_s_id, u_platform, u_status, str(u_pub_date) if u_pub_date else "", u_drive_link
+                    ]
+                    conn.update(worksheet="videos", data=df_videos)
+                    st.success("Modifications enregistrées !")
+                    st.rerun()
+                    
+                if delete_trigger:
+                    df_videos = df_videos[df_videos['id'] != selected_vid_id]
+                    conn.update(worksheet="videos", data=df_videos)
+                    st.warning("Vidéo supprimée du planning.")
+                    st.rerun()
