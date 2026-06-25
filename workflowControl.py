@@ -601,4 +601,6 @@ compiled_html = compiled_html.replace("__STAFF_DATA__", json.dumps(staff_list))
 compiled_html = compiled_html.replace("__VIDEOS_DATA__", json.dumps(videos_list))
 
 # AFFICHAGE DANS STREAMLIT
-components.html(compiled_html, height=950, scrolling=True)
+# On utilise st.components.v1.html avec le paramètre de rendu classique
+# Si le problème persiste, on peut forcer l'iframe à accepter les scripts de redirection
+st.components.v1.html(compiled_html, height=950, scrolling=True)
