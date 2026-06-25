@@ -1,7 +1,6 @@
 import streamlit as st
 from streamlit_gsheets import GSheetsConnection
 import pandas as pd
-import json
 from datetime import datetime
 
 # Configuration de la page
@@ -31,32 +30,26 @@ def load_data():
 
 df_videos, df_clients, df_staff = load_data()
 
-# Nettoyage des données pour éviter les bugs avec le JSON
+# Nettoyage des données pour éviter les bugs d'affichage
 df_videos = df_videos.fillna("").astype(str)
 df_clients = df_clients.fillna("").astype(str)
 df_staff = df_staff.fillna("").astype(str)
 
 client_dict = dict(zip(df_clients['id'], df_clients['name'])) if not df_clients.empty else {}
+client_color_dict = dict(zip(df_clients['id'], df_clients['color'])) if not df_clients.empty else {}
 staff_dict = dict(zip(df_staff['id'], df_staff['name'])) if not df_staff.empty else {}
 
-# 2. TRAITEMENT DES ACTIONS VIA PARAMÈTRES D'URL (BACKEND)
-query_params = st.query_params
-if "action" in query_params and query_params["action"] == "move_video":
-    vid_id = query_params.get("vid_id")
-    new_status = query_params.get("new_status")
-    new_date = query_params.get("date", "")
-    
-    if vid_id and new_status:
-        idx = df_videos[df_videos['id'] == vid_id].index
-        if not idx.empty:
-            df_videos.loc[idx, 'status'] = new_status
-            df_videos.loc[idx, 'date'] = new_date if new_status == 'programme' else ""
-            conn.update(worksheet="videos", data=df_videos)
-            st.toast("🔄 Base mise à jour !", icon="✅")
-        st.query_params.clear()
-        st.rerun()
+# Ordre logique des colonnes du Workflow
+status_order = ["pool", "montage", "validation", "attente-prog", "programme"]
+statuses = {
+    "pool": "⏳ Pool d'attente",
+    "montage": "🎬 En Montage",
+    "validation": "👀 À valider",
+    "attente-prog": "⏸️ Attente Prog",
+    "programme": "📅 Programmées"
+}
 
-# 3. BARRE LATÉRALE - CONFIGURATION CLIENTS & STAFF
+# 2. BARRE LATÉRALE - CONFIGURATION CLIENTS & STAFF
 with st.sidebar:
     st.header("⚙️ Configuration")
     conf_tab = st.radio("Gérer :", ["Restaurateurs (Clients)", "Équipe / Staff"])
@@ -86,131 +79,84 @@ with st.sidebar:
                     st.success("Membre ajouté !")
                     st.rerun()
 
-# 4. ONGLETS DE NAVIGATION PRINCIPAUX (RESTAURÉS)
+# 3. ONGLETS DE NAVIGATION PRINCIPAUX
 tab_pipeline, tab_calendar, tab_actions = st.tabs(["📊 Pipeline (Kanban)", "📅 Calendrier de Publication", "➕ Ajouter / Modifier"])
 
-# --- ONGLET 1 : PIPELINE INTERACTIF (DRAG & DROP CORRIGÉ) ---
+# Styles CSS pour habiller le Kanban natif
+st.markdown("""
+    <style>
+    .kanban-box {
+        background-color: #1e293b;
+        border-radius: 8px;
+        padding: 10px;
+        margin-bottom: 8px;
+        border-left: 4px solid #6366f1;
+        box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+    }
+    .badge-pt {
+        background-color: #334155;
+        padding: 1px 5px;
+        border-radius: 4px;
+        font-size: 10px;
+        font-weight: bold;
+    }
+    </style>
+""", unsafe_allow_html=True)
+
+# --- ONGLET 1 : PIPELINE KANBAN (VERSION NATIVE ULTRA-FIABLE) ---
 with tab_pipeline:
+    cols = st.columns(len(status_order))
     
-    # Code HTML/JS mis à jour avec une méthode de communication robuste (window.top.location)
-    html_template = """
-    <!DOCTYPE html>
-    <html>
-    <head>
-        <meta charset="UTF-8">
-        <script src="https://cdn.jsdelivr.net/npm/@tailwindcss/browser@4"></script>
-        <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
-        <style>
-            body { font-family: 'Inter', sans-serif; background-color: #0f172a; color: #f8fafc; }
-            .kanban-col { min-height: 450px; }
-            .drag-over { background-color: rgba(99, 102, 241, 0.1); border: 2px dashed #6366f1; }
-        </style>
-    </head>
-    <body class="p-1 select-none">
-        <div class="grid grid-cols-1 lg:grid-cols-5 gap-4">
-            <div class="bg-slate-800/60 p-3 rounded-xl border border-slate-700">
-                <h3 class="font-bold text-xs uppercase text-amber-400 mb-2 border-b border-slate-700 pb-1">⏳ Pool d'attente</h3>
-                <div id="col-pool" class="kanban-col space-y-2 rounded-lg" ondragover="allowDrop(event)" ondrop="drop(event, 'pool')" ondragenter="dragEnter(event)" ondragleave="dragLeave(event)"></div>
-            </div>
-            <div class="bg-slate-800/60 p-3 rounded-xl border border-slate-700">
-                <h3 class="font-bold text-xs uppercase text-blue-400 mb-2 border-b border-slate-700 pb-1">🎬 En Montage</h3>
-                <div id="col-montage" class="kanban-col space-y-2 rounded-lg" ondragover="allowDrop(event)" ondrop="drop(event, 'montage')" ondragenter="dragEnter(event)" ondragleave="dragLeave(event)"></div>
-            </div>
-            <div class="bg-slate-800/60 p-3 rounded-xl border border-slate-700">
-                <h3 class="font-bold text-xs uppercase text-purple-400 mb-2 border-b border-slate-700 pb-1">👀 À valider</h3>
-                <div id="col-validation" class="kanban-col space-y-2 rounded-lg" ondragover="allowDrop(event)" ondrop="drop(event, 'validation')" ondragenter="dragEnter(event)" ondragleave="dragLeave(event)"></div>
-            </div>
-            <div class="bg-slate-800/60 p-3 rounded-xl border border-slate-700">
-                <h3 class="font-bold text-xs uppercase text-pink-400 mb-2 border-b border-slate-700 pb-1">⏸️ Attente Prog</h3>
-                <div id="col-attente-prog" class="kanban-col space-y-2 rounded-lg" ondragover="allowDrop(event)" ondrop="drop(event, 'attente-prog')" ondragenter="dragEnter(event)" ondragleave="dragLeave(event)"></div>
-            </div>
-            <div class="bg-slate-800/60 p-3 rounded-xl border border-slate-700">
-                <h3 class="font-bold text-xs uppercase text-emerald-400 mb-2 border-b border-slate-700 pb-1">📅 Programmées</h3>
-                <div id="col-programme" class="kanban-col space-y-2 rounded-lg" ondragover="allowDrop(event)" ondrop="drop(event, 'programme')" ondragenter="dragEnter(event)" ondragleave="dragLeave(event)"></div>
-            </div>
-        </div>
-
-        <script>
-            const clients = __CLIENTS__;
-            const staff = __STAFF__;
-            const videos = __VIDEOS__;
-
-            function render() {
-                videos.forEach(v => {
-                    const c = clients.find(cl => String(cl.id) === String(v.clientId)) || { name: 'Inconnu', color: '#64748b' };
-                    const s = staff.find(st => String(st.id) === String(v.staffId)) || { name: 'Non assigné' };
-                    const platformClass = v.platform === 'TikTok' ? 'bg-cyan-500/20 text-cyan-300' : 'bg-fuchsia-500/20 text-fuchsia-300';
-                    
-                    const card = document.createElement('div');
-                    card.id = v.id;
-                    card.draggable = true;
-                    card.className = "bg-slate-700/40 p-2.5 rounded-lg border-l-4 shadow cursor-grab active:cursor-grabbing hover:bg-slate-700/70 transition";
-                    card.style.borderColor = c.color;
-                    card.ondragstart = (e) => e.dataTransfer.setData("text/plain", e.target.id);
-                    
-                    card.innerHTML = `
-                        <div class="flex justify-between text-[10px] mb-1 font-medium">
-                            <span class="px-1 rounded ${platformClass}">${v.platform}</span>
-                            <span style="color:${c.color}">${c.name}</span>
-                        </div>
-                        <h4 class="text-xs font-semibold text-white">${v.title}</h4>
-                        <div class="text-[9px] text-slate-400 mt-1.5">👤 ${s.name} ${v.date ? ' | 🗓️ '+v.date : ''}</div>
-                    `;
-                    
-                    const container = document.getElementById(`col-${v.status}`);
-                    if(container) container.appendChild(card);
-                });
-            }
-
-            function allowDrop(e) { e.preventDefault(); }
-            function dragEnter(e) { const col = e.target.closest('.kanban-col'); if(col) col.classList.add('drag-over'); }
-            function dragLeave(e) { const col = e.target.closest('.kanban-col'); if(col) col.classList.remove('drag-over'); }
-
-            function drop(e, destStatus) {
-                e.preventDefault();
-                const col = e.target.closest('.kanban-col');
-                if(col) col.classList.remove('drag-over');
+    for i, status_key in enumerate(status_order):
+        with cols[i]:
+            st.markdown(f"### {statuses[status_key]}")
+            vids_in_status = df_videos[df_videos['status'] == status_key]
+            st.caption(f"{len(vids_in_status)} vidéo(s)")
+            st.write("---")
+            
+            for _, vid in vids_in_status.iterrows():
+                client_name = client_dict.get(vid['clientId'], "Inconnu")
+                client_color = client_color_dict.get(vid['clientId'], "#6366f1")
+                staff_name = staff_dict.get(vid['staffId'], "Non assigné")
+                date_str = f" | 🗓️ {vid['date']}" if vid['date'] else ""
                 
-                const id = e.dataTransfer.getData("text/plain");
-                if(!id) return;
+                # Carte visuelle
+                st.markdown(f"""
+                <div class="kanban-box" style="border-left-color: {client_color}">
+                    <div style="display:flex; justify-content:between; font-size:11px; margin-bottom:2px;">
+                        <span class="badge-pt" style="color:#a7f3d0;">{vid['platform']}</span>
+                        <span style="font-weight:bold; margin-left:auto; color:{client_color};">{client_name}</span>
+                    </div>
+                    <strong style="font-size:13px; color:white;">{vid['title']}</strong><br>
+                    <span style="font-size:10px; color:#94a3b8;">👤 {staff_name}{date_str}</span>
+                </div>
+                """, unsafe_allow_html=True)
+                
+                # Boutons de déplacement sous chaque carte
+                btn_cols = st.columns([1, 1])
+                
+                # Bouton reculer (sauf si on est sur la première colonne)
+                if i > 0:
+                    if btn_cols[0].button("◀️", key=f"left_{vid['id']}", use_container_width=True):
+                        df_videos.loc[df_videos['id'] == vid['id'], 'status'] = status_order[i-1]
+                        if status_order[i-1] != 'programme':
+                            df_videos.loc[df_videos['id'] == vid['id'], 'date'] = ""
+                        conn.update(worksheet="videos", data=df_videos)
+                        st.rerun()
+                        
+                # Bouton avancer (sauf si on est sur la dernière colonne)
+                if i < len(status_order) - 1:
+                    next_status = status_order[i+1]
+                    if btn_cols[1].button("▶️", key=f"right_{vid['id']}", use_container_width=True):
+                        # Si on envoie vers le statut planifié, on demande une date
+                        if next_status == "programme":
+                            st.warning("Pour planifier, passez par l'onglet 'Ajouter / Modifier'")
+                        else:
+                            df_videos.loc[df_videos['id'] == vid['id'], 'status'] = next_status
+                            conn.update(worksheet="videos", data=df_videos)
+                            st.rerun()
 
-                let dateVal = "";
-                if(destStatus === "programme") {
-                    dateVal = prompt("Date de publication (AAAA-MM-JJ) :");
-                    if(!dateVal) return;
-                }
-
-                // Utilisation de window.top pour forcer l'Iframe à casser son isolation de sécurité d'un clic
-                try {
-                    const url = new URL(window.top.location.href);
-                    url.searchParams.set("action", "move_video");
-                    url.searchParams.set("vid_id", id);
-                    url.searchParams.set("new_status", destStatus);
-                    if(dateVal) url.searchParams.set("date", dateVal);
-                    window.top.location.href = url.href;
-                } catch(err) {
-                    // Alternative si le navigateur bloque toujours l'accès au top-level
-                    const url = new URL(window.parent.location.href);
-                    url.searchParams.set("action", "move_video");
-                    url.searchParams.set("vid_id", id);
-                    url.searchParams.set("new_status", destStatus);
-                    if(dateVal) url.searchParams.set("date", dateVal);
-                    window.parent.location.href = url.href;
-                }
-            }
-
-            render();
-        </script>
-    </body>
-    </html>
-    """
-    
-    compiled_html = html_template.replace("__CLIENTS__", json.dumps(df_clients.to_dict(orient="records")))
-    compiled_html = compiled_html.replace("__STAFF__", json.dumps(df_staff.to_dict(orient="records")))
-    compiled_html = compiled_html.replace("__VIDEOS__", json.dumps(df_videos.to_dict(orient="records")))
-    st.components.v1.html(compiled_html, height=550, scrolling=True)
-
-# --- ONGLET 2 : VUE CALENDRIER (RESTAURÉE) ---
+# --- ONGLET 2 : VUE CALENDRIER ---
 with tab_calendar:
     st.subheader("🗓️ Planning des Publications Programmées")
     vids_programmed = df_videos[df_videos['status'] == "programme"].copy()
@@ -231,9 +177,9 @@ with tab_calendar:
             hide_index=True
         )
     else:
-        st.info("Aucune vidéo n'est planifiée dans la colonne 'Programmées' pour le moment.")
+        st.info("Aucune vidéo planifiée avec une date précise pour le moment.")
 
-# --- ONGLET 3 : ACTIONS & AJOUT GROUPÉ / BULK (RESTAURÉ) ---
+# --- ONGLET 3 : ACTIONS & AJOUT GROUPÉ / BULK ---
 with tab_actions:
     act_mode = st.radio("Action :", ["Ajouter une vidéo", "Création groupée (Bulk)", "Modifier / Supprimer"], horizontal=True)
     
@@ -248,23 +194,27 @@ with tab_actions:
             c_id = st.selectbox("Restaurateur *", options=list(client_options.keys()), format_func=lambda x: client_options[x])
             s_id = st.selectbox("Assigner à", options=list(staff_options.keys()), format_func=lambda x: staff_options[x])
             platform = st.selectbox("Réseau Principal", ["TikTok", "Instagram", "Les deux"])
-            status = st.selectbox("Étape", ["pool", "montage", "validation", "attente-prog"])
+            status = st.selectbox("Étape", list(statuses.keys()), format_func=lambda x: statuses[x])
+            pub_date = st.date_input("Date (uniquement si programmée)", value=None)
             
             if st.form_submit_button("Enregistrer", use_container_width=True):
                 if title:
-                    new_vid = {'id': str(int(datetime.now().timestamp())), 'title': title, 'clientId': c_id, 'staffId': s_id, 'platform': platform, 'date': "", 'status': status, 'link': "#"}
+                    new_vid = {
+                        'id': str(int(datetime.now().timestamp())), 'title': title, 'clientId': c_id, 
+                        'staffId': s_id, 'platform': platform, 'date': str(pub_date) if pub_date else "", 'status': status, 'link': "#"
+                    }
                     df_videos = pd.concat([df_videos, pd.DataFrame([new_vid])], ignore_index=True)
                     conn.update(worksheet="videos", data=df_videos)
-                    st.success(f"Vidéo enregistrée !")
+                    st.success("Vidéo enregistrée !")
                     st.rerun()
 
     elif act_mode == "Création groupée (Bulk)":
         with st.form("bulk_form", clear_on_submit=True):
             c_id = st.selectbox("Restaurateur *", options=list(client_options.keys()), format_func=lambda x: client_options[x])
             platform = st.selectbox("Réseau Principal", ["TikTok", "Instagram", "Les deux"])
-            bulk_titles = st.text_area("Titres des vidéos (une par ligne) *", placeholder="Vidéo 1\nVidéo 2\nVidéo 3")
+            bulk_titles = st.text_area("Titres des vidéos (une par ligne) *")
             
-            if st.form_submit_button("Générer les vidéos en masse", use_container_width=True):
+            if st.form_submit_button("Générer en masse", use_container_width=True):
                 if bulk_titles:
                     lines = [line.strip() for line in bulk_titles.split("\n") if line.strip()]
                     new_rows = []
@@ -273,7 +223,7 @@ with tab_actions:
                         new_rows.append({'id': str(ts + idx), 'title': line, 'clientId': c_id, 'staffId': "", 'platform': platform, 'date': "", 'status': "pool", 'link': "#"})
                     df_videos = pd.concat([df_videos, pd.DataFrame(new_rows)], ignore_index=True)
                     conn.update(worksheet="videos", data=df_videos)
-                    st.success(f"{len(new_rows)} vidéos ajoutées avec succès au Pool d'attente !")
+                    st.success(f"{len(new_rows)} vidéos ajoutées au Pool !")
                     st.rerun()
 
     elif act_mode == "Modifier / Supprimer":
@@ -286,11 +236,18 @@ with tab_actions:
             
             with st.form("edit_form"):
                 u_title = st.text_input("Titre", value=vid_data['title'])
-                u_status = st.selectbox("Étape", ["pool", "montage", "validation", "attente-prog", "programme"], index=["pool", "montage", "validation", "attente-prog", "programme"].index(vid_data['status']))
+                u_s_id = st.selectbox("Assigner à", options=list(staff_options.keys()), index=list(staff_options.keys()).index(vid_data['staffId']) if vid_data['staffId'] in staff_options else 0, format_func=lambda x: staff_options[x])
+                u_status = st.selectbox("Étape", list(statuses.keys()), index=list(statuses.keys()).index(vid_data['status']), format_func=lambda x: statuses[x])
+                
+                current_date = None
+                if vid_data['date']:
+                    try: current_date = datetime.strptime(vid_data['date'], "%Y-%m-%d").date()
+                    except: pass
+                u_date = st.date_input("Date de publication", value=current_date)
                 
                 col_save, col_del = st.columns([3, 1])
                 if col_save.st.form_submit_button("💾 Sauvegarder"):
-                    df_videos.loc[df_videos['id'] == selected_id, ['title', 'status']] = [u_title, u_status]
+                    df_videos.loc[df_videos['id'] == selected_id, ['title', 'staffId', 'status', 'date']] = [u_title, u_s_id, u_status, str(u_date) if u_date else ""]
                     conn.update(worksheet="videos", data=df_videos)
                     st.success("Modifications enregistrées !")
                     st.rerun()
