@@ -21,21 +21,18 @@ def load_data():
             df_staff.to_dict(orient="records")
         )
     except:
-        # En cas de feuilles vides au démarrage
         return [], [], []
 
 # Chargement initial des données partagées
 videos_list, clients_list, staff_list = load_data()
 
 # 2. TRAITEMENT DES ACTIONS REÇUES DE L'INTERFACE HTML/JS
-# (Gestion des requêtes de mise à jour envoyées par le JavaScript)
 query_params = st.query_params
 if "action" in query_params:
     action = query_params["action"]
     data_payload = json.loads(query_params.get("data", "{}"))
     
     if action == "save_all":
-        # On convertit les listes reçues en DataFrames et on écrase le Google Sheets
         df_v = pd.DataFrame(data_payload.get("videos", []))
         df_c = pd.DataFrame(data_payload.get("clients", []))
         df_s = pd.DataFrame(data_payload.get("staff", []))
@@ -44,13 +41,11 @@ if "action" in query_params:
         conn.update(worksheet="clients", data=df_c)
         conn.update(worksheet="staff", data=df_s)
         st.toast("🔄 Base de données partagée mise à jour !", icon="✅")
-        # Nettoyage des paramètres pour éviter les boucles
         st.query_params.clear()
         st.rerun()
 
-# 3. CODE INTERFACE (HTML/JS) ADAPTÉ POUR COMMUNIQUER AVEC LE PYTHON
-# On injecte dynamiquement les données du Google Sheets dans le JS au démarrage
-html_code = f"""
+# 3. CODE INTERFACE (HTML/JS) - Utilisation d'une chaîne classique (sans f-string)
+html_template = """
 <!DOCTYPE html>
 <html lang="fr">
 <head>
@@ -60,10 +55,10 @@ html_code = f"""
     <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap" rel="stylesheet">
     <link rel="stylesheet" href="https://fonts.googleapis.com/icon?family=Material+Icons+Round">
     <style>
-        body {{ font-family: 'Inter', sans-serif; }}
-        .column-body {{ min-height: 450px; }}
-        .dragging {{ opacity: 0.4; transform: scale(0.96); }}
-        .calendar-grid {{ display: grid; grid-template-columns: repeat(7, minmax(0, 1fr)); }}
+        body { font-family: 'Inter', sans-serif; }
+        .column-body { min-height: 450px; }
+        .dragging { opacity: 0.4; transform: scale(0.96); }
+        .calendar-grid { display: grid; grid-template-columns: repeat(7, minmax(0, 1fr)); }
     </style>
 </head>
 <body class="bg-slate-900 text-slate-100 min-h-screen flex flex-col select-none">
@@ -279,13 +274,13 @@ html_code = f"""
         let currentView = 'kanban';
         let currentDate = new Date();
 
-        // INJECTION DIRECTE DES DONNÉES DU GOOGLE SHEETS DEPUIS PYTHON
-        let clients = {json.dumps(clients_list)};
-        let staff = {json.dumps(staff_list)};
-        let videos = {json.dumps(videos_list)};
+        // ZONE D'INJECTION DYNAMIQUE VIA REPLACEMENT PYTHON
+        let clients = __CLIENTS_DATA__;
+        let staff = __STAFF_DATA__;
+        let videos = __VIDEOS_DATA__;
 
         // Nettoyage des formats de données Pandas (NaN vers chaînes vides)
-        videos = videos.map(v => ({{
+        videos = videos.map(v => ({
             id: String(v.id || ''),
             title: String(v.title || ''),
             clientId: String(v.clientId || ''),
@@ -294,75 +289,74 @@ html_code = f"""
             date: String(v.date || '') === 'nan' ? '' : String(v.date || ''),
             link: String(v.link || '#'),
             status: String(v.status || 'pool')
-        }}));
+        }));
 
         // FONCTION DE SAUVEGARDE EN LIGNE (Envoi vers Python Streamlit)
-        function saveAll() {{
-            const payload = JSON.stringify({{ videos, clients, staff }});
-            // On utilise l'URL de Streamlit pour lui passer les nouvelles données
+        function saveAll() {
+            const payload = JSON.stringify({ videos, clients, staff });
             const url = new URL(window.location.href);
             url.searchParams.set("action", "save_all");
             url.searchParams.set("data", payload);
-            window.location.href = url.href; // Provoque le rafraîchissement et la sauvegarde Cloud
-        }}
+            window.location.href = url.href;
+        }
 
-        function switchView(view) {{
+        function switchView(view) {
             currentView = view;
             document.getElementById('view-kanban').classList.toggle('hidden', view !== 'kanban');
             document.getElementById('view-calendar').classList.toggle('hidden', view !== 'calendar');
             document.getElementById('view-settings').classList.toggle('hidden', view !== 'settings');
             renderAll();
-        }}
+        }
 
-        function populateDropdowns() {{
+        function populateDropdowns() {
             const selects = ['client-select', 'bulk-client-select'];
-            selects.forEach(sId => {{
+            selects.forEach(sId => {
                 const el = document.getElementById(sId);
                 if(!el) return;
                 el.innerHTML = '';
-                clients.forEach(c => el.innerHTML += `<option value="${{c.id}}">${{c.name}}</option>`);
-            }});
+                clients.forEach(c => el.innerHTML += `<option value="${c.id}">${c.name}</option>`);
+            });
             const staffSelect = document.getElementById('assigned-select');
-            if(staffSelect) {{
+            if(staffSelect) {
                 staffSelect.innerHTML = '<option value="">Non assigné</option>';
-                staff.forEach(s => staffSelect.innerHTML += `<option value="${{s.id}}">${{s.name}}</option>`);
-            }}
-        }}
+                staff.forEach(s => staffSelect.innerHTML += `<option value="${s.id}">${s.name}</option>`);
+            }
+        }
 
-        function addClient(e) {{
+        function addClient(e) {
             e.preventDefault();
             const name = document.getElementById('new-client-name').value;
             const color = document.getElementById('new-client-color').value;
-            clients.push({{ id: 'c_' + Date.now(), name, color }});
+            clients.push({ id: 'c_' + Date.now(), name, color });
             saveAll();
-        }}
+        }
 
-        function removeClient(id) {{
-            if(confirm("Supprimer ce restaurateur ?")) {{
+        function removeClient(id) {
+            if(confirm("Supprimer ce restaurateur ?")) {
                 clients = clients.filter(c => c.id !== id);
                 saveAll();
-            }}
-        }}
+            }
+        }
 
-        function addStaff(e) {{
+        function addStaff(e) {
             e.preventDefault();
             const name = document.getElementById('new-staff-name').value;
-            staff.push({{ id: 's_' + Date.now(), name }});
+            staff.push({ id: 's_' + Date.now(), name });
             saveAll();
-        }}
+        }
 
-        function removeStaff(id) {{
-            if(confirm("Supprimer ce membre ?")) {{
+        function removeStaff(id) {
+            if(confirm("Supprimer ce membre ?")) {
                 staff = staff.filter(s => s.id !== id);
                 saveAll();
-            }}
-        }}
+            }
+        }
 
-        function toggleModal(show) {{ document.getElementById('videoModal').classList.toggle('hidden', !show); }}
-        function toggleBulkModal(show) {{ document.getElementById('bulkModal').classList.toggle('hidden', !show); }}
+        function toggleModal(show) { document.getElementById('videoModal').classList.toggle('hidden', !show); }
+        function toggleBulkModal(show) { document.getElementById('bulkModal').classList.toggle('hidden', !show); }
 
-        function openModalForAdd(defaultDate = '') {{
-            if(clients.length === 0) {{ alert("Ajoutez d'abord un client dans Clients & Staff."); return; }}
+        function openModalForAdd(defaultDate = '') {
+            if(clients.length === 0) { alert("Ajoutez d'abord un client dans Clients & Staff."); return; }
             document.getElementById('modalTitle').innerText = "Créer une vidéo";
             document.getElementById('videoForm').reset();
             document.getElementById('edit-id').value = '';
@@ -370,9 +364,9 @@ html_code = f"""
             document.getElementById('prodDate').value = defaultDate;
             document.getElementById('btn-delete').classList.add('hidden');
             toggleModal(true);
-        }}
+        }
 
-        function openModalForEdit(id) {{
+        function openModalForEdit(id) {
             const v = videos.find(item => item.id === id);
             if(!v) return;
             document.getElementById('modalTitle').innerText = "Paramètres";
@@ -386,17 +380,17 @@ html_code = f"""
             document.getElementById('driveLink').value = v.link === "#" ? "" : v.link;
             document.getElementById('btn-delete').classList.remove('hidden');
             toggleModal(true);
-        }}
+        }
 
-        function handleFormSubmit(e) {{
+        function handleFormSubmit(e) {
             e.preventDefault();
             const id = document.getElementById('edit-id').value;
             const status = document.getElementById('status').value;
             const date = document.getElementById('prodDate').value;
 
-            if (status === 'programme' && !date) {{ alert('Date requise.'); return; }}
+            if (status === 'programme' && !date) { alert('Date requise.'); return; }
 
-            const data = {{
+            const data = {
                 title: document.getElementById('title').value,
                 clientId: document.getElementById('client-select').value,
                 staffId: document.getElementById('assigned-select').value,
@@ -404,41 +398,41 @@ html_code = f"""
                 status: status,
                 date: status === 'programme' ? date : '',
                 link: document.getElementById('driveLink').value || "#"
-            }};
+            };
 
-            if(id) {{
+            if(id) {
                 const idx = videos.findIndex(v => v.id === id);
-                if(idx !== -1) videos[idx] = {{ id, ...data }};
-            }} else {{
-                videos.push({{ id: String(Date.now()), ...data }});
-            }}
+                if(idx !== -1) videos[idx] = { id, ...data };
+            } else {
+                videos.push({ id: String(Date.now()), ...data });
+            }
             saveAll();
-        }}
+        }
 
-        function triggerDelete() {{
+        function triggerDelete() {
             const id = document.getElementById('edit-id').value;
-            if(id && confirm("Supprimer ?")) {{
+            if(id && confirm("Supprimer ?")) {
                 videos = videos.filter(v => v.id !== id);
                 saveAll();
-            }}
-        }}
+            }
+        }
 
-        function openBulkModal() {{
-            if(clients.length === 0) {{ alert("Configurez un client d'abord."); return; }}
+        function openBulkModal() {
+            if(clients.length === 0) { alert("Configurez un client d'abord."); return; }
             document.getElementById('bulk-titles').value = '';
             toggleBulkModal(true);
-        }}
+        }
 
-        function handleBulkSubmit(e) {{
+        function handleBulkSubmit(e) {
             e.preventDefault();
             const clientId = document.getElementById('bulk-client-select').value;
             const platform = document.getElementById('bulk-platform').value;
             const rawTitles = document.getElementById('bulk-titles').value.split('\n');
 
-            rawTitles.forEach(t => {{
+            rawTitles.forEach(t => {
                 const clean = t.trim();
-                if(clean.length > 0) {{
-                    videos.push({{
+                if(clean.length > 0) {
+                    videos.push({
                         id: 'b_' + Math.random().toString(36).substr(2, 5),
                         title: clean,
                         clientId: clientId,
@@ -447,153 +441,153 @@ html_code = f"""
                         status: 'pool',
                         date: '',
                         link: '#'
-                    }});
-                }}
-            }});
+                    });
+                }
+            });
             saveAll();
-        }}
+        }
 
-        function createCard(v) {{
-            const clientObj = clients.find(c => String(c.id) === String(v.clientId)) || {{ name: 'Inconnu', color: '#64748b' }};
-            const staffObj = staff.find(s => String(s.id) === String(v.staffId)) || {{ name: 'Non assigné' }};
+        function createCard(v) {
+            const clientObj = clients.find(c => String(c.id) === String(v.clientId)) || { name: 'Inconnu', color: '#64748b' };
+            const staffObj = staff.find(s => String(s.id) === String(v.staffId)) || { name: 'Non assigné' };
             const pColor = v.platform === 'TikTok' ? 'bg-cyan-500/20 text-cyan-300' : v.platform === 'Instagram' ? 'bg-fuchsia-500/20 text-fuchsia-300' : 'bg-indigo-500/20 text-indigo-300';
-            const dateBadge = v.date ? `<div class="mt-2 text-[10px] text-green-400 font-medium flex items-center"><span class="material-icons-round text-xs mr-1">calendar_today</span> ${{formatDateString(v.date)}}</div>` : '';
+            const dateBadge = v.date ? `<div class="mt-2 text-[10px] text-green-400 font-medium flex items-center"><span class="material-icons-round text-xs mr-1">calendar_today</span> ${formatDateString(v.date)}</div>` : '';
 
             return `
                 <div class="bg-slate-700/60 hover:bg-slate-700 border-l-4 p-3 rounded-xl shadow transition-all cursor-grab active:cursor-grabbing group relative" 
-                     style="border-color: ${{clientObj.color}}" draggable="true" id="${{v.id}}" ondragstart="drag(event)" ondragend="dragEnd(event)" onclick="openModalForEdit('${{v.id}}')">
+                     style="border-color: ${clientObj.color}" draggable="true" id="${v.id}" ondragstart="drag(event)" ondragend="dragEnd(event)" onclick="openModalForEdit('${v.id}')">
                     <div class="flex items-center justify-between mb-1">
-                        <span class="text-[9px] font-bold uppercase tracking-wider px-1.5 py-0.5 rounded ${pColor}">${{v.platform}}</span>
-                        <span class="text-[10px] font-bold px-2 py-0.5 rounded-full" style="background-color: ${{clientObj.color}}20; color: ${{clientObj.color}}">${{clientObj.name}}</span>
+                        <span class="text-[9px] font-bold uppercase tracking-wider px-1.5 py-0.5 rounded ${pColor}">${v.platform}</span>
+                        <span class="text-[10px] font-bold px-2 py-0.5 rounded-full" style="background-color: ${clientObj.color}20; color: ${clientObj.color}">${clientObj.name}</span>
                     </div>
-                    <h4 class="font-semibold text-xs text-white leading-tight mb-2">${{v.title}}</h4>
+                    <h4 class="font-semibold text-xs text-white leading-tight mb-2">${v.title}</h4>
                     <div class="flex items-center text-[10px] text-slate-400">
                         <span class="material-icons-round text-xs mr-1 text-slate-500">account_circle</span>
-                        <span class="truncate">${{staffObj.name}}</span>
+                        <span class="truncate">${staffObj.name}</span>
                     </div>
-                    ${{dateBadge}}
+                    ${dateBadge}
                 </div>
             `;
         }
 
-        function renderAll() {{
+        function renderAll() {
             populateDropdowns();
-            if(currentView === 'kanban') {{
-                const cols = {{ pool: [], montage: [], validation: [], 'attente-prog': [], programme: [] }};
-                videos.forEach(v => {{ if(cols[v.status]) cols[v.status].push(v); }});
-                Object.keys(cols).forEach(cName => {{
-                    document.getElementById(`count-${{cName}}`).innerText = cols[cName].length;
-                    const box = document.getElementById(`col-${{cName}}`);
+            if(currentView === 'kanban') {
+                const cols = { pool: [], montage: [], validation: [], 'attente-prog': [], programme: [] };
+                videos.forEach(v => { if(cols[v.status]) cols[v.status].push(v); });
+                Object.keys(cols).forEach(cName => {
+                    document.getElementById(`count-${cName}`).innerText = cols[cName].length;
+                    const box = document.getElementById(`col-${cName}`);
                     box.innerHTML = '';
                     cols[cName].forEach(v => box.innerHTML += createCard(v));
-                }});
-            } else if(currentView === 'calendar') {{
+                });
+            } else if(currentView === 'calendar') {
                 const side = document.getElementById('cal-sidebar-backlog');
                 side.innerHTML = '';
                 videos.filter(v => v.status === 'attente-prog').forEach(v => side.innerHTML += createCard(v));
                 renderCalendarGrid();
-            }} else {{
+            } else {
                 const cBox = document.getElementById('settings-clients-list');
                 cBox.innerHTML = '';
-                clients.forEach(c => {{
+                clients.forEach(c => {
                     cBox.innerHTML += `
                         <div class="flex justify-between items-center bg-slate-900 px-3 py-2 rounded-lg border border-slate-700">
                             <div class="flex items-center space-x-2">
-                                <span class="w-3 h-3 rounded-full" style="background-color: ${{c.color}}"></span>
-                                <span class="text-sm font-medium text-slate-200">${{c.name}}</span>
+                                <span class="w-3 h-3 rounded-full" style="background-color: ${c.color}"></span>
+                                <span class="text-sm font-medium text-slate-200">${c.name}</span>
                             </div>
-                            <button onclick="removeClient('${{c.id}}')" class="text-slate-500 hover:text-rose-400 transition cursor-pointer"><span class="material-icons-round text-sm">delete</span></button>
+                            <button onclick="removeClient('${c.id}')" class="text-slate-500 hover:text-rose-400 transition cursor-pointer"><span class="material-icons-round text-sm">delete</span></button>
                         </div>
                     `;
-                }});
+                });
                 const sBox = document.getElementById('settings-staff-list');
                 sBox.innerHTML = '';
-                staff.forEach(s => {{
+                staff.forEach(s => {
                     sBox.innerHTML += `
                         <div class="flex justify-between items-center bg-slate-900 px-3 py-2 rounded-lg border border-slate-700">
-                            <span class="text-sm text-slate-200 font-medium">${{s.name}}</span>
-                            <button onclick="removeStaff('${{s.id}}')" class="text-slate-500 hover:text-rose-400 transition cursor-pointer"><span class="material-icons-round text-sm">delete</span></button>
+                            <span class="text-sm text-slate-200 font-medium">${s.name}</span>
+                            <button onclick="removeStaff('${s.id}')" class="text-slate-500 hover:text-rose-400 transition cursor-pointer"><span class="material-icons-round text-sm">delete</span></button>
                         </div>
                     `;
-                }});
-            }}
+                });
+            }
         }
 
-        function renderCalendarGrid() {{
+        function renderCalendarGrid() {
             const grid = document.getElementById('calendar-days-grid');
             grid.innerHTML = '';
             const y = currentDate.getFullYear();
             const m = currentDate.getMonth();
-            document.getElementById('calendar-month-year').innerText = currentDate.toLocaleDateString('fr-FR', {{ month: 'long', year: 'numeric' }});
+            document.getElementById('calendar-month-year').innerText = currentDate.toLocaleDateString('fr-FR', { month: 'long', year: 'numeric' });
             const firstDay = (new Date(y, m, 1).getDay() + 6) % 7;
             const totalDays = new Date(y, m + 1, 0).getDate();
 
             for (let i = 0; i < firstDay; i++) grid.innerHTML += `<div class="bg-slate-800/10 border border-slate-800/30 rounded-lg opacity-10"></div>`;
 
-            for (let d = 1; d <= totalDays; d++) {{
-                const dStr = `${{y}}-${{String(m + 1).padStart(2, '0')}}-${{String(d).padStart(2, '0')}}`;
+            for (let d = 1; d <= totalDays; d++) {
+                const dStr = `${y}-${String(m + 1).padStart(2, '0')}-${String(d).padStart(2, '0')}`;
                 const matchedVids = videos.filter(v => v.status === 'programme' && v.date === dStr);
                 let inlineHTML = '';
-                matchedVids.forEach(v => {{
-                    const cObj = clients.find(c => String(c.id) === String(v.clientId)) || {{ name: '?', color: '#indigo' }};
+                matchedVids.forEach(v => {
+                    const cObj = clients.find(c => String(c.id) === String(v.clientId)) || { name: '?', color: '#indigo' };
                     inlineHTML += `
-                        <div onclick="event.stopPropagation(); openModalForEdit('${{v.id}}')" class="text-[10px] p-1 rounded font-medium truncate border mb-1 text-white" 
-                             style="background-color: ${{cObj.color}}cc; border-color: ${{cObj.color}}">
-                            [${{cObj.name}}] ${{v.title}}
+                        <div onclick="event.stopPropagation(); openModalForEdit('${v.id}')" class="text-[10px] p-1 rounded font-medium truncate border mb-1 text-white" 
+                             style="background-color: ${cObj.color}cc; border-color: ${cObj.color}">
+                            [${cObj.name}] ${v.title}
                         </div>
                     `;
-                }});
+                });
                 const isToday = new Date().toDateString() === new Date(y, m, d).toDateString() ? 'border-2 border-indigo-500 bg-slate-800' : 'border-slate-700/60 bg-slate-800/40';
                 const cell = document.createElement('div');
-                cell.className = `${{isToday}} border rounded-xl p-1.5 flex flex-col min-h-[95px] overflow-hidden hover:bg-slate-800/70 transition`;
+                cell.className = `${isToday} border rounded-xl p-1.5 flex flex-col min-h-[95px] overflow-hidden hover:bg-slate-800/70 transition`;
                 cell.setAttribute('ondragover', 'allowDrop(event)');
-                cell.setAttribute('ondrop', `dropOnDate(event, '${{dStr}}')`);
-                cell.setAttribute('onclick', `openModalForAdd('${{dStr}}')`);
-                cell.innerHTML = `<div class="text-right text-xs font-bold text-slate-500 mb-1">${{d}}</div><div class="flex-1 overflow-y-auto space-y-0.5">${{inlineHTML}}</div>`;
+                cell.setAttribute('ondrop', `dropOnDate(event, '${dStr}')`);
+                cell.setAttribute('onclick', `openModalForAdd('${dStr}')`);
+                cell.innerHTML = `<div class="text-right text-xs font-bold text-slate-500 mb-1">${d}</div><div class="flex-1 overflow-y-auto space-y-0.5">${inlineHTML}</div>`;
                 grid.appendChild(cell);
-            }}
+            }
         }
 
-        function changeMonth(dir) {{
+        function changeMonth(dir) {
             if(dir === 0) currentDate = new Date();
             else currentDate.setMonth(currentDate.getMonth() + dir);
             renderCalendarGrid();
-        }}
+        }
 
-        function formatDateString(str) {{
-            return new Date(str).toLocaleDateString('fr-FR', {{ day: 'numeric', month: 'short' }});
-        }}
+        function formatDateString(str) {
+            return new Date(str).toLocaleDateString('fr-FR', { day: 'numeric', month: 'short' });
+        }
 
-        function drag(ev) {{ ev.dataTransfer.setData("text/plain", ev.target.id); ev.target.classList.add('dragging'); }}
-        function dragEnd(ev) {{ ev.target.classList.remove('dragging'); }}
-        function allowDrop(ev) {{ ev.preventDefault(); }}
+        function drag(ev) { ev.dataTransfer.setData("text/plain", ev.target.id); ev.target.classList.add('dragging'); }
+        function dragEnd(ev) { ev.target.classList.remove('dragging'); }
+        function allowDrop(ev) { ev.preventDefault(); }
         
-        function drop(ev, destStatus) {{
+        function drop(ev, destStatus) {
             ev.preventDefault();
             const id = ev.dataTransfer.getData("text/plain");
             const idx = videos.findIndex(v => v.id === id);
-            if(idx !== -1) {{
-                if(destStatus === 'programme' && !videos[idx].date) {{
+            if(idx !== -1) {
+                if(destStatus === 'programme' && !videos[idx].date) {
                     const d = prompt("Date requise (AAAA-MM-JJ) :");
                     if(!d) return;
                     videos[idx].date = d;
-                }}
+                }
                 if(destStatus !== 'programme') videos[idx].date = '';
                 videos[idx].status = destStatus;
                 saveAll();
-            }}
+            }
         }
 
-        function dropOnDate(ev, dateStr) {{
+        function dropOnDate(ev, dateStr) {
             ev.preventDefault(); ev.stopPropagation();
             const id = ev.dataTransfer.getData("text/plain");
             const idx = videos.findIndex(v => v.id === id);
-            if(idx !== -1) {{
+            if(idx !== -1) {
                 videos[idx].status = 'programme';
                 videos[idx].date = dateStr;
                 saveAll();
-            }}
-        }}
+            }
+        }
 
         renderAll();
     </script>
@@ -601,4 +595,10 @@ html_code = f"""
 </html>
 """
 
-components.html(html_code, height=950, scrolling=True)
+# INJECTION DES DONNÉES EN TOUTE SÉCURITÉ SANS CONFLIT D'ACCOLADES
+compiled_html = html_template.replace("__CLIENTS_DATA__", json.dumps(clients_list))
+compiled_html = compiled_html.replace("__STAFF_DATA__", json.dumps(staff_list))
+compiled_html = compiled_html.replace("__VIDEOS_DATA__", json.dumps(videos_list))
+
+# AFFICHAGE DANS STREAMLIT
+components.html(compiled_html, height=950, scrolling=True)
